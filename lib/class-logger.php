@@ -12,11 +12,10 @@ class WP_SYND_logger {
 	
 	private function __construct() {}
 	
-	public function success( $title, $msg, $category_slug ) {
+	public function success( $title, $msg ) {
 		$args = array(
 					'post_title'    => $title,
 					'post_content'  => $msg,
-					'post_category' => $category_slug,
 					'post_author'   => 1,
 					'post_status'   => 'publish',
 					'post_type'     => 'wp-syndicate-log'
@@ -29,11 +28,10 @@ class WP_SYND_logger {
 		return $post_id;
 	}
 	
-	public function error( $title, $msg, $category_slug ) {
+	public function error( $title, $msg ) {
 		$args = array(
 					'post_title'    => $title,
 					'post_content'  => $msg,
-					'post_category' => $category_slug,
 					'post_author'   => 1,
 					'post_status'   => 'publish',
 					'post_type'     => 'wp-syndicate-log'
@@ -92,7 +90,8 @@ class WP_SYND_Log_Operator {
 	    								'can_export' => true,
 	    								'capability_type' => 'feed_log',
     									'capabilities'    => $capabilities,
-    									'map_meta_cap' => true
+    									'map_meta_cap' => true,
+    									'exclude_from_search' => true
 	    							));
 
 	    register_taxonomy(
@@ -109,7 +108,7 @@ class WP_SYND_Log_Operator {
 
 	public function set_event() {
 		$action_time = time() + 60;
-		wp_clear_scheduled_hook( $this->event );
+
 		wp_schedule_event( $action_time, $this->key, $this->event );
 		spawn_cron( $action_time );
 	}
@@ -120,7 +119,7 @@ class WP_SYND_Log_Operator {
 	
 	public function delete_log() {
 		global $wpdb;
-		$options = get_option( 'wp_syndicate_options' );
+		$options = get_option( 'wp_syndicate_options', 14 );
 		$term_day = $options['delete_log_term'] != '' ? $options['delete_log_term'] : 7;
 		$term = "-" . $term_day . " day";
 		$date = date_i18n( 'Y/m/d H:i:s', strtotime($term) );
@@ -166,14 +165,15 @@ class WP_SYND_Log_Operator {
 		global $post_type;
 		if ( is_object_in_taxonomy( $post_type, 'log-category' ) ) {
 			$terms = get_terms('log-category');
-			$get = isset($_GET['log-category']) ? $_GET['log-category'] : '';
+			$get = isset($_GET['term']) ? $_GET['term'] : '';
 	?>
-		<select name="log-category">
+		<select name="term">
 			<option value="0"></option>
 			<?php foreach( $terms as $term ) : ?>
 			<option <?php selected( $get, $term->slug ); ?> value="<?php echo $term->slug; ?>"><?php echo $term->name; ?></option>
 			<?php endforeach; ?>
 		</select>
+		<input type="hidden" name="taxonomy" value="log-category" />
 	<?php
 		}
 	}
