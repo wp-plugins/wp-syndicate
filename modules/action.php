@@ -9,6 +9,7 @@ class WP_SYND_Action {
 	private $host = '';
 	private $match_count = 0;
 	private $media_id = '';
+	private $is_enclosure = false;
 
 	public function __construct() {
 		add_filter( 'cron_schedules', array( $this, 'cron_schedules' ) );
@@ -49,8 +50,9 @@ class WP_SYND_Action {
 	public function cron_schedules($schedules) {
 		$posts = get_posts($this->args);
 
-		if ( empty($posts) )
-			return;
+		if ( empty($posts) ) {
+			return $schedules;
+		}
 
 		foreach ( $posts as $post ) {
 			$key = 'wp_syndicate_' . $post->post_name;
@@ -133,6 +135,7 @@ class WP_SYND_Action {
 		$registration_method = get_post_meta( $post_id, 'wp_syndicate-registration-method', true );
 		$post_type = get_post_meta( $post_id, 'wp_syndicate-default-post-type', true );
 		foreach ( $rss_items as $item ) {
+			$this->is_enclosure = false;
 			
 			//投稿ID取得
 			$slug = $post->post_name . '_' . $item->get_id();
@@ -159,7 +162,7 @@ class WP_SYND_Action {
  								'post_title' => apply_filters( 'wp_syndicate_get_title', $item->get_title(), $post_id ),
 								'post_content' => '',
 							));
-							
+
 			//画像の登録
 			if ( $set_post_id ) {
 				$images = get_attached_media( 'image', $set_post_id );
@@ -169,11 +172,16 @@ class WP_SYND_Action {
 					}
 				}
 			}
-			$content = apply_filters( 'the_content', $item->get_content() );
-			$this->match_count = 0;
-			$content = preg_replace_callback( '/<img(.*)src="(.*?)"(.*)\/>/',  array($this, 'update_link'), $content, -1 );
-			$this->match_count = 0;
 
+			$content = apply_filters( 'the_content', $item->get_content() );
+			if ( $enclosure = $item->get_enclosure() && !empty($enclosure->link) ) {
+				$this->is_enclosure = true;
+				$this->set_enclosure( $enclosure->link );
+			} 
+
+			$this->match_count = 0;
+			$content = preg_replace_callback( '/<img(.*)src="(.*?)"(.*)>/',  array($this, 'update_link'), $content, -1 );
+			$this->match_count = 0;
 			$this->post->set(array(
 								'post_content' => apply_filters( 'wp_syndicate_get_content', $content, $post_id )
 							));
@@ -216,7 +224,7 @@ class WP_SYND_Action {
 
 	public function update_link( $matches ) {
 	
-		if ( is_array($matches) && array_key_exists(2, $matches) &&  strpos($matches[2], $this->host) !== false ) {
+		if ( is_array($matches) && array_key_exists(2, $matches) ) {
 			$args    = array();
 			$user    = get_post_meta( $this->media_id, 'wp_syndicate-basic-auth-user', true );
 			$pass    = get_post_meta( $this->media_id, 'wp_syndicate-basic-auth-pass', true );
@@ -227,7 +235,13 @@ class WP_SYND_Action {
 				);
 			}
 			if ( $media = remote_get_file($matches[2], '', $args) ) {
-				$thumnail_flg = $this->match_count > 0 ? false : true;
+
+				if ( $this->is_enclosure === true ) {
+					$thumnail_flg = false;
+				} else {
+					$thumnail_flg = $this->match_count > 0 ? false : true;
+				}
+
 				$this->post->add_media($media, '', '', '', $thumnail_flg);
 				$url = preg_split( '/wp-content/', $media );
 				$url = home_url( 'wp-content' . $url[1] );
@@ -239,6 +253,23 @@ class WP_SYND_Action {
 			} 
 		}
 		return $matches[0];
+	}
+	
+	public function set_enclosure($link) {
+		if ( !empty($link) ) {
+			$args    = array();
+			$user    = get_post_meta( $this->media_id, 'wp_syndicate-basic-auth-user', true );
+			$pass    = get_post_meta( $this->media_id, 'wp_syndicate-basic-auth-pass', true );
+			if ( !empty($user) && !empty($pass) ) {
+				$args = array(
+					'headers' =>
+						array( 'Authorization' => 'Basic ' . base64_encode( $user . ':' . $pass ) )
+				);
+			}
+			if ( $media = remote_get_file($link, '', $args) ) {
+				$this->post->add_media($media, '', '', '', true);
+			}
+		}
 	}
 }
 new WP_SYND_Action();
