@@ -1,4 +1,0 @@
-WP-Syndicate
-============
-
-wp-syndicate
