@@ -5,12 +5,12 @@ class WP_SYND_Action {
 					'posts_per_page' => -1,
 					'post_status' => 'publish'
 				);
-	private $post = '';
-	private $host = '';
+	private $post;
+	private $host;
 	private $match_count = 0;
-	private $media_id = '';
+	private $media_id;
 	private $is_enclosure = false;
-	private $enclosure_url = '';
+	private $enclosure_url;
 
 	public function __construct() {
 		add_filter( 'cron_schedules', array( $this, 'cron_schedules' ) );
@@ -39,9 +39,9 @@ class WP_SYND_Action {
 			if ( !wp_next_scheduled( $hook, array( $post->ID ) ) ) {
 				$this->set_event($post->ID);
 				$subject = '[' . get_bloginfo( 'name' ) . ']' . __( 'WP Cron Error', WPSYND_DOMAIN );
-				$msg  = sprintf( __( '%s of WP Cron restart, because it stopped.', WPSYND_DOMAIN ), $hooke ) . "\n". __( 'action time', WPSYND_DOMAIN ). ':' . date_i18n('Y/m/d:H:i:s') . "\n\n\n";
+				$msg  = sprintf( __( '%s of WP Cron restart, because it stopped.', WPSYND_DOMAIN ), $hook ) . "\n". __( 'action time', WPSYND_DOMAIN ). ':' . date_i18n('Y/m/d:H:i:s') . "\n\n\n";
 				$msg .= admin_url();
-				$error_post_id = WP_SYND_logger::get_instance()->error( $subject, $msg );
+				WP_SYND_logger::get_instance()->error( $subject, $msg );
 				$options = get_option( 'wp_syndicate_options' );
 				wp_mail( $options['error_mail'], $subject, $msg );
 			}
@@ -60,7 +60,7 @@ class WP_SYND_Action {
 			$interval_min = get_post_meta( $post->ID, 'wp_syndicate-feed-retrieve-term', true );
 			$interval = intval($interval_min)*60;
 			$display = get_the_title( $post->ID );
-			$schedules[$key] = array( 'interval' => $interval, 'display' => $interval_min . 'min' );
+			$schedules[$key] = array( 'interval' => $interval, 'display' => $display );
 		}
 
 		return $schedules;
@@ -107,10 +107,11 @@ class WP_SYND_Action {
 		$this->media_id = $post_id;
 		$feed_url = html_entity_decode(get_post_meta( $post_id, 'wp_syndicate-feed-url', true ), ENT_QUOTES, 'UTF-8');
 
-		add_action('wp_feed_options', function(&$feed, $url){
-    		$feed->set_timeout(30); // set to 30 seconds
-            $feed->force_feed(true);
-		}, 10, 2);
+		add_action('wp_feed_options', function(&$feed){
+			$feed->set_timeout(30);
+			$feed->force_feed(true);
+			$feed->enable_cache(false);
+		}, 10);
 		
 		add_filter( 'wp_feed_cache_transient_lifetime' , array( $this, 'return_0' ) );
 		$rss = fetch_feed( $feed_url );
@@ -160,19 +161,22 @@ class WP_SYND_Action {
 				continue;
 			}
 
-			$this->post = new wp_post_helper(array(
+			$post_args = array(
 								'ID' => $set_post_id,
 								'post_name' => $slug,
-								'post_author' => get_post_meta( $post_id, 'wp_syndicate-author-id', true ),
 								'post_date' => apply_filters( 'wp_syndicate_get_date', $item->get_date('Y/m/d H:i:s'), $post_id ),
-								'post_type' => get_post_meta( $post_id, 'wp_syndicate-default-post-type', true ),
-								'post_status' => get_post_meta( $post_id, 'wp_syndicate-default-post-status', true ),
  								'post_title' => apply_filters( 'wp_syndicate_get_title', $item->get_title(), $post_id ),
 								'post_content' => '',
-							));
+							);
+			if ( !$updated ) {
+				$post_args['post_author'] = get_post_meta( $post_id, 'wp_syndicate-author-id', true );
+				$post_args['post_status'] = get_post_meta( $post_id, 'wp_syndicate-default-post-status', true );
+				$post_args['post_type'] = get_post_meta( $post_id, 'wp_syndicate-default-post-type', true );
+			}
+			$this->post = new wp_post_helper($post_args);
 
 			//画像の登録
-			if ( $set_post_id ) {
+			if ( $updated ) {
 				$images = get_attached_media( 'image', $set_post_id );
 				if ( is_array( $images ) ) {
 					foreach ( $images as $image ) {
@@ -232,16 +236,17 @@ class WP_SYND_Action {
 
 	public function update_link( $matches ) {
 	
-		if ( is_array($matches) && array_key_exists(2, $matches) ) {
+		if ( is_array($matches) && array_key_exists(2, $matches) && isset($this->post) && is_object($this->post) && is_a($this->post, 'wp_post_helper') ) {
 			$args    = array();
 			$user    = get_post_meta( $this->media_id, 'wp_syndicate-basic-auth-user', true );
 			$pass    = get_post_meta( $this->media_id, 'wp_syndicate-basic-auth-pass', true );
 			if ( !empty($user) && !empty($pass) ) {
 				$args = array(
-					'headers' =>
-						array( 'Authorization' => 'Basic ' . base64_encode( $user . ':' . $pass ) )
+					'headers' => array( 'Authorization' => 'Basic ' . base64_encode( $user . ':' . $pass ) )
 				);
 			}
+
+			$args['timeout'] = 30;
 			if ( $media = remote_get_file($matches[2], '', $args) ) {
 
 				if ( $this->is_enclosure === true ) {
@@ -269,16 +274,17 @@ class WP_SYND_Action {
 	}
 	
 	public function set_enclosure($link) {
-		if ( !empty($link) ) {
+		if ( !empty($link) && is_object($this->post) && is_a($this->post, 'wp_post_helper') ) {
 			$args    = array();
 			$user    = get_post_meta( $this->media_id, 'wp_syndicate-basic-auth-user', true );
 			$pass    = get_post_meta( $this->media_id, 'wp_syndicate-basic-auth-pass', true );
 			if ( !empty($user) && !empty($pass) ) {
 				$args = array(
-					'headers' =>
-						array( 'Authorization' => 'Basic ' . base64_encode( $user . ':' . $pass ) )
+					'headers' => array( 'Authorization' => 'Basic ' . base64_encode( $user . ':' . $pass ) )
 				);
 			}
+
+			$args['timeout'] = 30;
 			if ( $media = remote_get_file($link, '', $args) ) {
 				$this->post->add_media($media, '', '', '', true);
 				$url = preg_split( '/wp-content/', $media );
